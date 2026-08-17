@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parent Portal</title>
+<style>
+:root{
+  --blue-950:#052A57; --blue-900:#083A75; --blue-700:#0B57B0; --blue-600:#0F7AE5; --blue-100:#E4F1FD; --blue-50:#F2F9FF;
+  --ink:#16213A; --muted:#5B6A88; --line:#DCE4F3; --gold:#F4B740; --green:#0E8A4F; --red:#C0392B;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;background:linear-gradient(160deg,var(--blue-50),#fff 60%);min-height:100vh;color:var(--ink);padding:20px}
+.wrap{max-width:640px;margin:0 auto}
+.hero{background:linear-gradient(125deg,var(--blue-950),var(--blue-700));color:#fff;border-radius:18px;padding:24px 26px;margin-bottom:18px;text-align:center}
+.hero .logo{width:52px;height:52px;border-radius:13px;background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;color:var(--blue-900);font-size:18px;margin:0 auto 10px;overflow:hidden}
+.hero .logo img{width:100%;height:100%;object-fit:contain}
+.hero h1{font-size:19px}
+.hero p{font-size:12.5px;opacity:.85;margin-top:3px}
+.card{background:#fff;border-radius:16px;padding:22px;box-shadow:0 10px 30px rgba(5,42,87,.1);margin-bottom:16px}
+label{display:block;font-size:12.5px;font-weight:700;color:#3A4A68;margin:0 0 6px}
+input{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 13px;font-size:15px;font-family:inherit}
+input:focus{outline:2px solid var(--blue-600);border-color:var(--blue-600)}
+button{width:100%;background:linear-gradient(90deg,var(--blue-600),#3D95EE);color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;margin-top:14px}
+button:hover{filter:brightness(1.06)}
+.err{color:var(--red);font-size:13px;margin-top:10px;display:none}
+.child-card{border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:14px}
+.child-card h2{font-size:17px;color:var(--blue-900);margin-bottom:2px}
+.child-card .sub{font-size:12.5px;color:var(--muted);margin-bottom:14px}
+.stat-row{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:14px}
+.stat{background:var(--blue-50);border-radius:10px;padding:10px 12px}
+.stat .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700}
+.stat .v{font-size:17px;font-weight:800;color:var(--blue-900);margin-top:2px}
+.section-title{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--blue-700);font-weight:800;margin:14px 0 6px}
+.row{display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;border-bottom:1px solid #EEF1F7}
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700}
+.badge.paid{background:#E3F5EC;color:var(--green)}
+.badge.due{background:#FDF1EF;color:var(--red)}
+.logout{text-align:center;margin-top:6px}
+.logout a{color:var(--muted);font-size:12.5px;text-decoration:none}
+.loading{text-align:center;padding:40px;color:var(--muted)}
+#loginScreen,#dataScreen{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <div class="logo" id="logoBox">🎓</div>
+    <h1 id="brandName">Bright Horizon</h1>
+    <p id="tagline">Parent Portal — view your child's progress anytime</p>
+  </div>
+
+  <div class="card loading" id="loadingScreen">Connecting…</div>
+
+  <div class="card" id="loginScreen">
+    <label>Your WhatsApp number (the one registered with us)</label>
+    <input id="phoneInput" placeholder="e.g. 447712345678" inputmode="tel">
+    <button onclick="doLogin()">View My Child's Progress</button>
+    <p class="err" id="loginErr"></p>
+  </div>
+
+  <div id="dataScreen"></div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
+<script>
+let allData=null;
+const params=new URLSearchParams(location.search);
+const dbKey=params.get("db");
+const cfgB64=params.get("cfg");
+const brand=params.get("brand");
+if(brand){document.getElementById("brandName").textContent=brand;document.getElementById("tagline").textContent="Parent Portal — "+brand;}
+
+function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));}
+function fmt(n,c){return c+" "+Number(n||0).toFixed(2);}
+function stars(n){return "★".repeat(n)+"☆".repeat(5-n);}
+
+async function init(){
+  if(!dbKey||!cfgB64){showLoginError("This portal link is incomplete. Please ask the institute for a fresh link.");return;}
+  let cfg;
+  try{cfg=JSON.parse(decodeURIComponent(escape(atob(cfgB64))));}
+  catch(e){showLoginError("This portal link could not be read. Please ask for a fresh link.");return;}
+  try{
+    if(!firebase.apps||!firebase.apps.length)firebase.initializeApp(cfg);
+    const db=firebase.firestore();
+    const doc=await db.collection("erp_institutes").doc(dbKey).get();
+    if(!doc.exists||!doc.data().json){showLoginError("No data found yet. Please try again later.");return;}
+    allData=JSON.parse(doc.data().json);
+    document.getElementById("loadingScreen").style.display="none";
+    document.getElementById("loginScreen").style.display="block";
+  }catch(e){
+    console.error(e);
+    showLoginError("Could not connect. Please check your internet connection and try again.");
+  }
+}
+function showLoginError(msg){
+  document.getElementById("loadingScreen").style.display="none";
+  document.getElementById("loginScreen").style.display="block";
+  const el=document.getElementById("loginErr");
+  el.textContent=msg;el.style.display="block";
+}
+
+function doLogin(){
+  const raw=document.getElementById("phoneInput").value.replace(/[^0-9]/g,"");
+  const err=document.getElementById("loginErr");
+  if(!raw){err.textContent="Please enter your WhatsApp number.";err.style.display="block";return;}
+  const matches=(allData.students||[]).filter(s=>(s.whats||"").replace(/[^0-9]/g,"")===raw);
+  if(!matches.length){err.textContent="No student found with that number. Please check and try again, or contact the institute.";err.style.display="block";return;}
+  err.style.display="none";
+  renderChildren(matches);
+}
+
+function attPct(sid){
+  let P=0,tot=0;
+  const att=allData.attendance||{};
+  Object.values(att).forEach(rec=>{
+    if(rec[sid]==="P"){P++;tot++;}
+    else if(rec[sid]==="A"||rec[sid]==="L"){tot++;}
+  });
+  return tot?Math.round(P/tot*100):null;
+}
+
+function renderChildren(list){
+  document.getElementById("loginScreen").style.display="none";
+  const el=document.getElementById("dataScreen");
+  el.style.display="block";
+  el.innerHTML=list.map(s=>{
+    const pct=attPct(s.id);
+    const perf=(allData.performance||[]).filter(p=>p.studentId===s.id).sort((a,b)=>(b.month||"").localeCompare(a.month||""));
+    const latest=perf[0];
+    const invoices=(allData.invoices||[]).filter(i=>i.studentId===s.id).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+    const unpaid=invoices.filter(i=>i.status!=="Paid");
+    const recentInvoices=invoices.slice(0,4);
+    return `<div class="child-card">
+      <h2>${esc(s.name)}</h2>
+      <div class="sub">${esc(s.course||"")}${s.grade?" · "+esc(s.grade):""} · Joined ${esc(s.join||"—")}</div>
+      <div class="stat-row">
+        <div class="stat"><div class="k">Attendance</div><div class="v">${pct===null?"—":pct+"%"}</div></div>
+        <div class="stat"><div class="k">Status</div><div class="v" style="font-size:14px">${esc(s.status)}</div></div>
+      </div>
+      ${latest?`
+      <div class="section-title">Latest Report — ${esc(latest.month||"")}</div>
+      <div class="row"><span>Rating</span><span>${stars(latest.rating||0)}</span></div>
+      ${latest.goal?`<div class="row"><span>Goal</span><span>${esc(latest.goal)}</span></div>`:""}
+      ${latest.progress?`<div class="row"><span>Progress</span><span>${esc(latest.progress)}</span></div>`:""}
+      ${latest.testScore?`<div class="row"><span>Test result</span><span>${esc(latest.testScore)}</span></div>`:""}
+      ${latest.comment?`<div class="row"><span>Remarks</span><span>${esc(latest.comment)}</span></div>`:""}
+      `:`<div class="section-title">Latest Report</div><div class="sub">No report yet.</div>`}
+      <div class="section-title">Recent Invoices</div>
+      ${recentInvoices.length?recentInvoices.map(i=>`<div class="row"><span>${esc(i.number)} — ${esc(i.date)}</span><span><span class="badge ${i.status==='Paid'?'paid':'due'}">${esc(i.status)}</span> ${fmt(i.total,i.currency)}</span></div>`).join(""):`<div class="sub">No invoices yet.</div>`}
+      ${unpaid.length?`<div class="row" style="font-weight:800;color:var(--red)"><span>Total due</span><span>${fmt(unpaid.reduce((t,i)=>t+(i.total-(i.paid||0)),0),unpaid[0].currency)}</span></div>`:""}
+    </div>`;
+  }).join("")+`<div class="logout"><a href="javascript:location.reload()">🔒 Log out</a></div>`;
+}
+init();
+</script>
+</body>
+</html>
